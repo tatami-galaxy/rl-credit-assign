@@ -16,7 +16,7 @@ from math_verify.errors import TimeoutException
 from latex2sympy2_extended import NormalizationConfig
 
 
-SYSTEM_PROMPT = r"Solve the problem step by step. Put your final answer inside \boxed{...}."
+SYSTEM_PROMPT = r"Solve the problem step by step. Think carefully before you answer. Put your thinking between <think> and </think>. Put your final answer inside \boxed{...}."
 VERIFIER_TIMEOUT = 3
 GOLD_EXTRACTION = LatexExtractionConfig()
 PRED_EXTRACTION = LatexExtractionConfig(normalization_config=NormalizationConfig(
