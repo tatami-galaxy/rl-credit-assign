@@ -6,8 +6,12 @@ policy loss. A separate, fully trainable critic supplies token-level GAE and a
 clipped value loss. There is no reference or reward model; Reasoning Gym's
 task scorer supplies the terminal reward, including partial credit. DeepScaleR
 and DeepMath use a binary Math-Verify reward through the same trainer; select
-`--dataset deepscaler` or `--dataset deepmath`. See the [main README](../../README.md) for math data
-preparation and holdout evaluation.
+`--dataset deepscaler` or `--dataset deepmath`.
+
+`config.py` owns PPO's defaults and CLI resolution; `train.py` owns its setup,
+resume checks, logging, and saving. These are independent of `expts/grpo/`.
+Data preparation, prompts, and scoring remain shared in `expts/data/`.
+PPO still inherits generation and policy-loss machinery from TRL's `GRPOTrainer`.
 
 From the repository root, select one available training GPU:
 

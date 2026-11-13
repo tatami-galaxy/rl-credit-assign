@@ -19,7 +19,7 @@ from trl.trainer.utils import repeat_iterable_dataset
 from expts.data.reasoning_gym import (
     create_task_dataset, evaluation_entries, generate_examples, make_reward_function,
 )
-from expts.train import validate_resume
+from expts.grpo.train import validate_resume
 
 
 @dataclass

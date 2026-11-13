@@ -1,4 +1,4 @@
-"""DeepMath schema mapping, metadata, dataset isolation, and shared trainer configuration."""
+"""DeepMath schema mapping, metadata, dataset isolation, and trainer configuration."""
 
 import json
 import tempfile
@@ -8,11 +8,11 @@ from unittest.mock import patch
 
 from datasets import Dataset
 
-from expts.config import parse_training_config
+from expts.grpo.config import parse_config as parse_grpo_config
 from expts.data import deepmath, deepscaler, math_data
 from expts.eval.config import parse_eval_config
 from expts.ppo.config import parse_config as parse_ppo_config
-from expts.train import validate_resume
+from expts.ppo.train import validate_resume
 
 
 CPU_ARGS = ["--use_cpu", "true", "--bf16", "false", "--report_to", "none", "--use_vllm", "false"]
@@ -109,7 +109,7 @@ class DeepMathTest(unittest.TestCase):
             self.assertIn("results/deepmath/eval", args.output_dir)
 
     def test_both_training_methods_resolve_deepmath_defaults(self):
-        for parser, method in ((parse_training_config, "grpo"), (parse_ppo_config, "ppo")):
+        for parser, method in ((parse_grpo_config, "grpo"), (parse_ppo_config, "ppo")):
             run, data, args = parser(CPU_ARGS + ["--dataset", "deepmath", "--holdout_size", "2"])
             self.assertEqual(run.dataset, "deepmath")
             self.assertEqual(run.wandb_project, "deepmath")

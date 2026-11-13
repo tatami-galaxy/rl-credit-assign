@@ -10,12 +10,112 @@ Run from the repository root, selecting an available GPU:
 Use --dataset deepscaler for DeepScaleR with the same math dataset options.
 """
 
-from ..config import parse_training_config
-from ..train import train
+import json
+from dataclasses import asdict
+from importlib.metadata import version
+from pathlib import Path
+from shutil import copyfile
+
+from transformers import AutoTokenizer, set_seed
+from transformers.trainer_utils import get_last_checkpoint
+from trl import GRPOTrainer
+
+from ..config import dataset_module
+from .config import parse_config
+
+
+def package_versions(dataset):
+    names = ["trl", "transformers", "torch", "datasets", "accelerate", "vllm"]
+    names += ["reasoning-gym"] if dataset == "reasoning_gym" else ["math-verify", "latex2sympy2_extended", "sympy"]
+    return {name: version(name) for name in names}
+
+
+def validate_resume(checkpoint, config):
+    """Check data identity and settings restored by the optimizer and scheduler."""
+    previous = json.loads((Path(checkpoint).parent / "run_config.json").read_text())
+    # Before the layout change, RG settings were stored at the top level.
+    if "data" not in previous:
+        previous["dataset"] = "reasoning_gym"
+        previous.setdefault("method", "grpo")
+        previous["data"] = {
+            key: previous.get(key) for key in ("task", "task_config", "task_sampling")
+        }
+        from ..data.reasoning_gym import SYSTEM_PROMPTS
+        previous["data"].update(system_prompt=SYSTEM_PROMPTS["default"], answer_format="think_then_answer_tags")
+    for key in ("method", "model_name", "dataset", "data"):
+        if previous.get(key) != config[key]:
+            raise ValueError(f"Cannot resume with changed {key}.")
+    for name, old_version in previous["versions"].items():
+        if config["versions"].get(name) != old_version:
+            raise ValueError(f"Cannot resume with changed {name} version.")
+    old, new = previous["training"], config["training"]
+    fields = (
+        "seed", "data_seed", "per_device_train_batch_size", "gradient_accumulation_steps",
+        "generation_batch_size", "steps_per_generation", "num_generations", "num_iterations",
+        "learning_rate", "lr_scheduler_type", "warmup_steps", "warmup_ratio",
+        "optim", "weight_decay", "max_grad_norm", "loss_type",
+        "epsilon", "epsilon_high", "max_completion_length", "mask_truncated_completions",
+        "temperature", "top_p", "top_k", "generation_kwargs", "chat_template_kwargs",
+        "bf16", "model_init_kwargs", "shuffle_dataset", "beta", "scale_rewards",
+    )
+    changed = [key for key in fields if old.get(key) != new.get(key)]
+    if changed:
+        raise ValueError(f"Cannot resume with changed training settings: {', '.join(changed)}")
+    if old["max_steps"] != new["max_steps"] and new["lr_scheduler_type"] != "constant":
+        raise ValueError("Changing max_steps on resume requires a constant learning-rate schedule.")
+
+
+def train(run, data_config, args):
+    set_seed(args.seed)
+    output_dir = Path(args.output_dir)
+    checkpoint = args.resume_from_checkpoint
+    if checkpoint is True:
+        checkpoint = get_last_checkpoint(str(output_dir)) if output_dir.exists() else None
+        if checkpoint is None:
+            raise ValueError(f"No checkpoint found in {output_dir}")
+    if not checkpoint and (output_dir / "run_config.json").exists():
+        raise FileExistsError(f"Run already exists: {output_dir}. Resume or choose a new output_dir.")
+    if checkpoint and run.dataset in {"deepscaler", "deepmath"} and data_config.split_manifest is None:
+        data_config.split_manifest = str(Path(checkpoint).parent / "split_manifest.json")
+
+    module = dataset_module(run.dataset)
+    train_dataset, scorer, metadata = module.load_training_data(data_config, args.seed)
+    config = {
+        **asdict(run), "method": "grpo", "data": metadata,
+        "training": args.to_dict(), "versions": package_versions(run.dataset),
+    }
+    if checkpoint:
+        validate_resume(checkpoint, config)
+    tokenizer = AutoTokenizer.from_pretrained(run.model_name, padding_side="left")
+    trainer = GRPOTrainer(
+        model=run.model_name, args=args, processing_class=tokenizer,
+        train_dataset=train_dataset, reward_funcs=module.make_reward_function(scorer, tokenizer),
+    )
+    wandb_run = None
+    try:
+        if trainer.accelerator.is_main_process:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if run.dataset in {"deepscaler", "deepmath"}:
+                source, target = Path(data_config.split_manifest), output_dir / "split_manifest.json"
+                if source.resolve() != target.resolve():
+                    copyfile(source, target)
+            (output_dir / "run_config.json").write_text(json.dumps(config, indent=2) + "\n")
+            if "wandb" in args.report_to:
+                import wandb
+
+                wandb_run = wandb.init(
+                    project=run.wandb_project, entity=run.wandb_entity, name=args.run_name,
+                    config=config, dir=str(output_dir),
+                )
+        trainer.train(resume_from_checkpoint=checkpoint)
+        trainer.save_model(str(output_dir / "final"))
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 def main():
-    train(*parse_training_config(), method="grpo")
+    train(*parse_config())
 
 
 if __name__ == "__main__":

@@ -1,9 +1,20 @@
 """Dataset-independent GRPO training defaults."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from transformers.trainer_utils import SchedulerType
 from trl import GRPOConfig
+
+from ..config import parse_options
+
+
+@dataclass
+class RunConfig:
+    model_name: str = "Qwen/Qwen3-4B"
+    dataset: str = "reasoning_gym"
+    wandb_project: str | None = None
+    wandb_entity: str = "ujan-rl"
 
 
 @dataclass
@@ -41,3 +52,27 @@ class TrainingConfig(GRPOConfig):
     chat_template_kwargs: dict | str | None = field(default_factory=lambda: {"enable_thinking": True})
     generation_kwargs: dict | str | None = field(default_factory=lambda: {"min_p": 0.0})
 
+
+def parse_config(argv=None):
+    run, data, args, parser = parse_options(RunConfig, TrainingConfig, argv)
+    if run.wandb_project is None:
+        run.wandb_project = run.dataset.replace("_", "-")
+    if args.max_steps <= 0:
+        parser.error("Training requires --max_steps > 0.")
+    model_label = Path(run.model_name).name
+    label = data.task if run.dataset == "reasoning_gym" else run.dataset
+    if args.run_name is None:
+        args.run_name = f"grpo-{model_label}-{label}-seed{args.seed}"
+    if args.output_dir == "trainer_output":
+        args.output_dir = f"/data/ujan/rl_credit/{run.dataset}/{args.run_name}"
+    # A finite math dataset should reshuffle every epoch; the RG stream orders itself.
+    if args.shuffle_dataset is None:
+        args.shuffle_dataset = run.dataset in {"deepscaler", "deepmath"}
+    for name in ("chat_template_kwargs", "generation_kwargs"):
+        setattr(args, name, {**parser.get_default(name), **(getattr(args, name) or {})})
+    if args.chat_template_kwargs["enable_thinking"] is not True:
+        parser.error("Only thinking mode is supported; enable_thinking must be true.")
+    args.model_init_kwargs = {
+        "dtype": "bfloat16" if args.bf16 else "float32", **(args.model_init_kwargs or {})
+    }
+    return run, data, args

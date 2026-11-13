@@ -11,11 +11,11 @@ from unittest.mock import patch
 from datasets import Dataset
 from math_verify.errors import TimeoutException
 
-from expts.config import parse_training_config
+from expts.grpo.config import parse_config as parse_grpo_config
 from expts.data import deepscaler as ds, math_data
 from expts.eval.config import parse_eval_config
 from expts.ppo.config import parse_config as parse_ppo_config
-from expts.train import validate_resume
+from expts.ppo.train import validate_resume
 
 
 CPU_ARGS = ["--use_cpu", "true", "--bf16", "false", "--report_to", "none", "--use_vllm", "false"]
@@ -133,7 +133,7 @@ class SplitTest(unittest.TestCase):
 
 class ConfigTest(unittest.TestCase):
     def test_method_and_dataset_configs_are_independent(self):
-        for parser in (parse_training_config, parse_ppo_config):
+        for parser in (parse_grpo_config, parse_ppo_config):
             _, math, training = parser(CPU_ARGS + ["--dataset", "deepscaler", "--holdout_size", "20"])
             self.assertTrue(training.shuffle_dataset)
             self.assertEqual(math.holdout_size, 20)

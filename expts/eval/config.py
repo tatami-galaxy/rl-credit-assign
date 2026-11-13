@@ -8,6 +8,14 @@ from ..config import parse_options, run_metadata
 
 
 @dataclass
+class RunConfig:
+    model_name: str = "Qwen/Qwen3-4B"
+    dataset: str = "reasoning_gym"
+    wandb_project: str | None = None
+    wandb_entity: str = "ujan-rl"
+
+
+@dataclass
 class EvalConfig:
     num_examples: int = 500  # Per task for RG task=all; total for finite math datasets.
     generation_seed: int = 42
@@ -24,7 +32,7 @@ class EvalConfig:
 
 
 def parse_eval_config(argv=None):
-    run, data, args, parser = parse_options(EvalConfig, argv)
+    run, data, args, parser = parse_options(RunConfig, EvalConfig, argv)
     if min(args.num_examples, args.max_new_tokens, args.tensor_parallel_size, args.max_num_seqs) <= 0:
         parser.error("num_examples, max_new_tokens, tensor_parallel_size, and max_num_seqs must be positive.")
     if not 0 < args.gpu_memory_utilization <= 1:
