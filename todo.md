@@ -1,6 +1,3 @@
-- GRPO
-- Actor critic -> PPO
-- SAC
 - Change max ent objective?
 - NLAC, segment policy opt, multi turn dense feedback
 - Iterative response generation

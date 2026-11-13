@@ -40,7 +40,7 @@ class TrainingConfig(GRPOConfig):
     shuffle_dataset: bool | None = None
     dataloader_num_workers: int = 0
     remove_unused_columns: bool = False
-    logging_steps: float = 1
+    logging_steps: float = 10
     log_completions: bool = False
     report_to: None | str | list[str] = "wandb"
     save_steps: float = 100
