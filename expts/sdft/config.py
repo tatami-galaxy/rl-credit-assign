@@ -21,7 +21,7 @@ class RunConfig:
 
 @dataclass
 class TrainingConfig(SDFTConfig):
-    """TRL defaults with a 1,000-step training budget and thinking enabled."""
+    """Explicit experiment defaults; all other options inherit TRL's defaults."""
 
     _VALID_DICT_FIELDS = SDFTConfig._VALID_DICT_FIELDS + ["chat_template_kwargs", "generation_kwargs"]
 
@@ -77,7 +77,7 @@ class TrainingConfig(SDFTConfig):
     dataloader_num_workers: int = 0
     remove_unused_columns: bool = False
     logging_steps: float = 10
-    report_to: None | str | list[str] = "none"
+    report_to: None | str | list[str] = "wandb"
     save_steps: float = 500
     save_total_limit: int | None = None
     model_init_kwargs: dict | str | None = None

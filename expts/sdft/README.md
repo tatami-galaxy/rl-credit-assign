@@ -8,9 +8,9 @@ default `{prompt}\n\n{privileged_context}` template. Both models score the same
 student-generated completion. Only the student receives gradients.
 
 The main algorithm and training options are explicit in `TrainingConfig` in
-`config.py`, using TRL defaults except for a 1,000-step training budget. Other
-options inherit TRL's defaults. In the
-tested TRL 1.17.1 / Transformers 5.19.0 environment, these include:
+`config.py`, using TRL defaults except for a 1,000-step training budget, gradient
+accumulation of 2, and W&B reporting. Other options inherit TRL's defaults. In the tested TRL 1.17.1 /
+Transformers 5.19.0 environment, these include:
 
 | Option | Default |
 | --- | --- |
@@ -20,14 +20,14 @@ tested TRL 1.17.1 / Transformers 5.19.0 environment, these include:
 | Generation backend | Transformers (`use_vllm=false`) |
 | Completion / prompt limits | 256 / 512 tokens |
 | Sampling | Temperature 1, top-p 1, top-k 0 |
-| Batch size / accumulation | 8 / 1 |
+| Batch size / accumulation | 8 / 2 |
 | Learning rate / schedule | 5e-5 / linear |
 | Training duration | 1,000 optimizer steps (`max_steps=1000`, overrides epochs) |
-| Reporting | None; pass `--report_to wandb` to enable W&B |
+| Reporting | W&B; pass `--report_to none` to disable |
 
 The repository supplies model/dataset selection, output naming, model loading
-dtype, a 1,000-step training budget, and `enable_thinking=true`. All other
-training defaults remain TRL's.
+dtype, a 1,000-step training budget, gradient accumulation of 2, W&B reporting,
+and `enable_thinking=true`. All other training defaults remain TRL's.
 Reasoning Gym defaults to `leg_counting`; the default model is `Qwen/Qwen3-4B`.
 This baseline deliberately uses TRL's defaults rather than the paper's EMA
 teacher and full-vocabulary forward-KL settings. All resolved options and

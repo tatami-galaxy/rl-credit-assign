@@ -35,14 +35,17 @@ CPU_ARGS = ["--use_cpu", "true", "--bf16", "false", "--report_to", "none"]
 
 class ConfigTest(unittest.TestCase):
     def test_matches_trl_defaults_except_experiment_overrides(self):
-        base = SDFTConfig(use_cpu=True, bf16=False, report_to="none").to_dict()
-        ours = TrainingConfig(use_cpu=True, bf16=False, report_to="none").to_dict()
+        base = SDFTConfig(use_cpu=True, bf16=False, report_to="none", gradient_accumulation_steps=2).to_dict()
+        ours = TrainingConfig(use_cpu=True, bf16=False).to_dict()
         ours.pop("chat_template_kwargs")
         base.pop("chat_template_kwargs")
         self.assertEqual(ours.pop("max_steps"), 1000)
         base.pop("max_steps")
+        self.assertEqual(ours.pop("report_to"), ["wandb"])
+        base.pop("report_to")
         self.assertEqual(ours, base)
         run, data, args = parse_config(CPU_ARGS)
+        self.assertEqual(args.report_to, [])
         self.assertEqual(run.num_train_examples, 10_000)
         self.assertEqual(data.task, "leg_counting")
         self.assertTrue(args.run_name.startswith("sdft-"))
