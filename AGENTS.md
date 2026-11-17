@@ -8,4 +8,4 @@ This repository explores LLM reasoning through small, incremental experiments.
 - Refactor working code when it improves simplicity or readability, preserving its behavior.
 - Verify changes with checks appropriate to their scope. Keep experimental settings and results easy to inspect and reproduce.
 
-- There is a todo.md. There's no need to read it. It contains my rough thoughts and notes.
+- There is a `thoughts` folder which contains my rough thoughts and notes. There's no need to read it.
