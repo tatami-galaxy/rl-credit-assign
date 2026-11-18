@@ -4,7 +4,7 @@ r"""Answer-conditioned SDFT with TRL defaults; select one training GPU.
         --task leg_counting --max_steps 100 --report_to wandb
 
     CUDA_VISIBLE_DEVICES=6 uv run python -m expts.sdft.train \
-        --dataset deepmath --max_steps 100 --use_vllm true
+        --dataset deepmath --max_steps 100
 """
 
 import copy
@@ -23,8 +23,10 @@ from .data import load_training_data
 from .trainer import SDFTTrainer
 
 
-def package_versions(dataset, use_vllm):
+def package_versions(dataset, use_vllm, optim):
     names = ["trl", "transformers", "torch", "datasets", "accelerate"]
+    if any(name in optim for name in ("8bit", "bnb", "paged")):
+        names.append("bitsandbytes")
     if use_vllm:
         names.append("vllm")
     names += ["reasoning-gym"] if dataset == "reasoning_gym" else ["math-verify", "latex2sympy2_extended", "sympy"]
@@ -76,7 +78,8 @@ def train(run, data_config, args):
         raise ValueError(f"Training needs at least {questions_per_batch} examples for one generation batch.")
     config = {
         **asdict(run), "method": "sdft", "data": metadata,
-        "training": copy.deepcopy(args.to_dict()), "versions": package_versions(run.dataset, args.use_vllm),
+        "training": copy.deepcopy(args.to_dict()),
+        "versions": package_versions(run.dataset, args.use_vllm, args.optim),
     }
     if checkpoint:
         validate_resume(checkpoint, config)

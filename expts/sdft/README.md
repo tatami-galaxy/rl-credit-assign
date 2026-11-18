@@ -8,26 +8,26 @@ default `{prompt}\n\n{privileged_context}` template. Both models score the same
 student-generated completion. Only the student receives gradients.
 
 The main algorithm and training options are explicit in `TrainingConfig` in
-`config.py`, using TRL defaults except for a 1,000-step training budget, gradient
-accumulation of 2, and W&B reporting. Other options inherit TRL's defaults. In the tested TRL 1.17.1 /
-Transformers 5.19.0 environment, these include:
+`config.py`. The teacher and loss use TRL defaults; the experiment settings
+below control training, sampling, and memory. Other options inherit TRL's
+defaults. The tested environment uses TRL 1.17.1 / Transformers 5.19.0.
 
 | Option | Default |
 | --- | --- |
 | Teacher | Frozen initial model (`base`) |
 | Distillation | Student top-100 logits, `alpha=0.5`, no tail bucket |
 | Generations per question | 8 |
-| Generation backend | Transformers (`use_vllm=false`) |
-| Completion / prompt limits | 256 / 512 tokens |
-| Sampling | Temperature 1, top-p 1, top-k 0 |
-| Batch size / accumulation | 8 / 2 |
+| Generation backend | vLLM colocate (`use_vllm=true`, GPU memory utilization 0.3) |
+| Completion / prompt limits | 8,192 / 512 tokens |
+| Sampling | Temperature 0.6, top-p 0.95, top-k 20 |
+| Batch size / accumulation | 1 / 16 |
+| Optimizer | bitsandbytes AdamW (`adamw_bnb_8bit`) |
 | Learning rate / schedule | 5e-5 / linear |
 | Training duration | 1,000 optimizer steps (`max_steps=1000`, overrides epochs) |
 | Reporting | W&B; pass `--report_to none` to disable |
 
-The repository supplies model/dataset selection, output naming, model loading
-dtype, a 1,000-step training budget, gradient accumulation of 2, W&B reporting,
-and `enable_thinking=true`. All other training defaults remain TRL's.
+The repository also supplies model/dataset selection, output naming, model
+loading dtype, and `enable_thinking=true`.
 Reasoning Gym defaults to `leg_counting`; the default model is `Qwen/Qwen3-4B`.
 This baseline deliberately uses TRL's defaults rather than the paper's EMA
 teacher and full-vocabulary forward-KL settings. All resolved options and
@@ -37,6 +37,19 @@ package versions are saved in `run_config.json`.
 
 Select one available GPU. This implementation supports one training process;
 DeepSpeed, FSDP, and multi-GPU training are not supported.
+
+In the current environment, FlashInfer's sampler cannot compile against the
+installed CUDA toolkit. Select vLLM's native sampler before launching:
+
+```sh
+export VLLM_USE_FLASHINFER_SAMPLER=0
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+```
+
+The sampler override keeps vLLM generation and the same top-k/top-p settings;
+see [vLLM's environment variables](https://docs.vllm.ai/en/latest/configuration/env_vars/).
+For simultaneous independent runs, set a different `MASTER_PORT` for each
+process (for example, `29606` and `29607`) to avoid rendezvous port collisions.
 
 ```sh
 PYTHONHASHSEED=0 CUDA_VISIBLE_DEVICES=6 uv run python -m expts.sdft.train \
@@ -61,14 +74,31 @@ default shuffling applies, and subsequent epochs revisit these indices.
 `num_train_examples` is only accepted for Reasoning Gym. Keep `PYTHONHASHSEED`
 fixed because some upstream task generators iterate sets.
 
-For vLLM generation, add `--use_vllm true`; the default vLLM mode is colocate.
-The teacher is still scored locally. The frozen teacher adds a model copy, and
-even top-k distillation constructs full student and teacher logits. For a
-smaller microbatch with the same eight completions per question, use
-`--per_device_train_batch_size 1 --gradient_accumulation_steps 8`.
+The default `--optim adamw_bnb_8bit` uses bitsandbytes to reduce optimizer-state
+memory while retaining full-parameter training and BF16 model weights. Install
+`bitsandbytes` in the training environment. Its version is saved in
+`run_config.json`. Use `--optim adamw_torch_fused` for standard AdamW, or
+`--optim adamw_torch --use_vllm false` for CPU tests. Changing optimizers requires a new run.
+See the [bitsandbytes optimizer guide](https://huggingface.co/docs/bitsandbytes/en/optimizers).
 
-The 256-token completion default can cut off reasoning. Match token budgets
-explicitly when comparing algorithms (e.g. `--max_completion_length 8192`).
+Optimizer state is only part of the memory cost: the frozen teacher adds a
+model copy, and even top-k distillation constructs full student and teacher
+logits. The training microbatch is 1, but TRL generates 16 responses together
+by default (batch size times gradient accumulation). `--generation_batch_size
+8` reduces this to one question's eight responses per generation call while
+keeping 16 accumulated training microbatches per optimizer step.
+
+For long Transformers rollouts, start the process with
+`PYTORCH_ALLOC_CONF=expandable_segments:True` to reduce fragmentation from
+changing allocation sizes. This is especially useful when reserved GPU memory
+is much larger than allocated tensor memory. See
+[PyTorch's allocator settings](https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-alloc-conf).
+
+vLLM generation is enabled by default in colocate mode, with
+`vllm_gpu_memory_utilization=0.3`. The teacher is still scored locally, and vLLM
+adds its own model/cache memory. Use `--use_vllm false` for Transformers generation.
+
+Match token budgets explicitly when comparing algorithms.
 Both student and teacher prompts are left-truncated at `max_prompt_length`;
 choose a limit large enough for the question plus reference answer. Long
 answers can otherwise push the question out of the teacher's context.

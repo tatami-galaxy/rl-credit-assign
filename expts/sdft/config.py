@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 from transformers.trainer_utils import SchedulerType
+from transformers.training_args import OptimizerNames
 from trl.experimental.sdft import SDFTConfig
 
 from ..config import parse_options
@@ -27,8 +28,9 @@ class TrainingConfig(SDFTConfig):
 
     # Training schedule and memory.
     max_steps: int = 1000
-    per_device_train_batch_size: int = 8
-    gradient_accumulation_steps: int = 2
+    per_device_train_batch_size: int = 1
+    gradient_accumulation_steps: int = 16
+    optim: OptimizerNames | str = "adamw_bnb_8bit"
     learning_rate: float = 5e-5
     lr_scheduler_type: SchedulerType | str = "linear"
     bf16: bool | None = None  # TRL enables bf16 unless fp16 is set.
@@ -64,7 +66,7 @@ class TrainingConfig(SDFTConfig):
     generation_kwargs: dict | str | None = None
 
     # Generation backend.
-    use_vllm: bool = False
+    use_vllm: bool = True
     use_teacher_server: bool = False
     vllm_mode: str = "colocate"
     vllm_gpu_memory_utilization: float = 0.3

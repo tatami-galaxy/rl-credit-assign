@@ -30,22 +30,27 @@ from expts.sdft import train as sdft
 from expts.sdft.trainer import SDFTTrainer, TEACHER_MODEL_FILE
 
 
-CPU_ARGS = ["--use_cpu", "true", "--bf16", "false", "--report_to", "none"]
+CPU_ARGS = [
+    "--use_cpu", "true", "--bf16", "false", "--report_to", "none",
+    "--optim", "adamw_torch", "--use_vllm", "false",
+]
 
 
 class ConfigTest(unittest.TestCase):
     def test_matches_trl_defaults_except_experiment_overrides(self):
-        base = SDFTConfig(use_cpu=True, bf16=False, report_to="none", gradient_accumulation_steps=2).to_dict()
+        base = SDFTConfig(
+            use_cpu=True, bf16=False, max_steps=1000, report_to="wandb",
+            per_device_train_batch_size=1, gradient_accumulation_steps=16,
+            optim="adamw_bnb_8bit", max_completion_length=8192,
+            temperature=0.6, top_p=0.95, top_k=20, use_vllm=True,
+        ).to_dict()
         ours = TrainingConfig(use_cpu=True, bf16=False).to_dict()
         ours.pop("chat_template_kwargs")
         base.pop("chat_template_kwargs")
-        self.assertEqual(ours.pop("max_steps"), 1000)
-        base.pop("max_steps")
-        self.assertEqual(ours.pop("report_to"), ["wandb"])
-        base.pop("report_to")
         self.assertEqual(ours, base)
         run, data, args = parse_config(CPU_ARGS)
         self.assertEqual(args.report_to, [])
+        self.assertEqual(args.optim, "adamw_torch")
         self.assertEqual(run.num_train_examples, 10_000)
         self.assertEqual(data.task, "leg_counting")
         self.assertTrue(args.run_name.startswith("sdft-"))
@@ -238,7 +243,8 @@ class TrainingTest(unittest.TestCase):
             flags = CPU_ARGS + [
                 "--model_name", str(model_dir), "--output_dir", str(output),
                 "--num_train_examples", "2", "--num_generations", "1",
-                "--per_device_train_batch_size", "1", "--max_completion_length", "4",
+                "--per_device_train_batch_size", "1", "--gradient_accumulation_steps", "1",
+                "--max_completion_length", "4",
                 "--save_steps", "1", "--lr_scheduler_type", "constant", "--disable_tqdm", "true",
             ]
             sdft.train(*parse_config(flags + ["--max_steps", "1"]))
@@ -266,7 +272,7 @@ class TrainingTest(unittest.TestCase):
                         teacher_model_kind=kind, max_steps=1, save_steps=1,
                         num_generations=2, per_device_train_batch_size=1, gradient_accumulation_steps=2,
                         max_completion_length=4, learning_rate=0.01, lr_scheduler_type="constant",
-                        optim="adamw_torch", disable_tqdm=True,
+                        optim="adamw_torch", use_vllm=False, disable_tqdm=True,
                     )
                     def build():
                         return SDFTTrainer(
