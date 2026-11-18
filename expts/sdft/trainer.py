@@ -27,7 +27,7 @@ class SDFTTrainer(TRLSDFTTrainer):
             entry=[row["entry"] for row in inputs],
             example_id=[row["example_id"] for row in inputs], log_metric=log_metric,
         )
-        log_metric("mean_reward", sum(scores) / len(scores))
+        log_metric("reward", sum(scores) / len(scores))
         return batch
 
     def _save_checkpoint(self, model, trial):

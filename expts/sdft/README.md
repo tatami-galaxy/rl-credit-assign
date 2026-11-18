@@ -75,7 +75,7 @@ answers can otherwise push the question out of the teacher's context.
 
 ## Metrics and evaluation
 
-The existing task scorers log `mean_reward`, `full_credit_rate`,
+The existing task scorers log `reward` (`train/reward` in W&B), `full_credit_rate`,
 `answer_extraction_rate`, and `thinking_complete_rate` once per generated batch.
 Math also reports verifier failures; task mixtures report per-task metrics.
 Scores are diagnostics and do not enter the loss. TRL logs distillation loss,

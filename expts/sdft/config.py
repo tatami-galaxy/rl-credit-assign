@@ -55,10 +55,10 @@ class TrainingConfig(SDFTConfig):
     generation_batch_size: int | None = None
     steps_per_generation: int | None = None
     max_prompt_length: int | None = 512
-    max_completion_length: int | None = 256
-    temperature: float = 1.0
-    top_p: float = 1.0
-    top_k: int = 0
+    max_completion_length: int | None = 8192
+    temperature: float = 0.6
+    top_p: float = 0.95
+    top_k: int = 20
     min_p: float | None = None
     repetition_penalty: float = 1.0
     generation_kwargs: dict | str | None = None

@@ -172,7 +172,7 @@ class MetricsTest(unittest.TestCase):
         with patch.object(TRLSDFTTrainer, "sample_rollouts", return_value=batch):
             self.assertIs(trainer.sample_rollouts([row, row]), batch)
         self.assertEqual(set(batch), {"completion_ids", "completion_mask"})
-        self.assertEqual(trainer._metrics["train"]["mean_reward"], [0.5])
+        self.assertEqual(trainer._metrics["train"]["reward"], [0.5])
         self.assertEqual(trainer._metrics["train"]["thinking_complete_rate"], [0.5])
 
 
