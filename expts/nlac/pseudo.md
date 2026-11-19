@@ -1,4 +1,4 @@
-Functions : 
+# Functions : 
 
 ```
 ACT(parameters, s)
@@ -66,7 +66,7 @@ NLL(parameters, prompt, target_text)
     )
 ```
 
-Algo : 
+# Algo : 
 
 ```
 INPUTS:
@@ -274,3 +274,26 @@ for iteration in range(number_of_iterations):
 RETURN:
     actor using ACT(θ, s)
 ```
+
+
+# Critic Training : 
+
+
+## Option 1 
+
+Drop `PREDICT_CONTINUATION`. `MAKE_CRITIC_TARGET` takes current state, rest of rollout, final reward/privileged info and produces evaluation of the current state/segment (the segment is only meaningful given the prefix). 
+
+
+## Option 2
+
+Drop `PREDICT_CONTINUATION`. `MAKE_CRITIC_TARGET` takes current state and only final reward/privileged info and produces evaluation of the current state. 
+
+
+## Option 3
+
+Drop `PREDICT_CONTINUATION`. `MAKE_CRITIC_TARGET` takes current state and optionally the final reward/privileged info. It also takes in the evaluation of the next future state or the next few future states. 
+
+
+## Option 4
+
+Keep `PREDICT_CONTINUATION`. `PREDICT_CONTINUATION` produces a compact summary of the trace from each state preserving information of how the computation of that segment is utilized in the future. Instead of the full rollout, this is what is used by `MAKE_CRITIC_TARGET`.

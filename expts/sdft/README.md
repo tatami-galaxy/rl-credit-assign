@@ -22,7 +22,7 @@ defaults. The tested environment uses TRL 1.17.1 / Transformers 5.19.0.
 | Sampling | Temperature 0.6, top-p 0.95, top-k 20 |
 | Batch size / accumulation | 1 / 16 |
 | Optimizer | bitsandbytes AdamW (`adamw_bnb_8bit`) |
-| Learning rate / schedule | 5e-5 / linear |
+| Learning rate / schedule | 1e-5 / linear |
 | Training duration | 1,000 optimizer steps (`max_steps=1000`, overrides epochs) |
 | Reporting | W&B; pass `--report_to none` to disable |
 

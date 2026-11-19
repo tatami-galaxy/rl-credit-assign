@@ -31,7 +31,7 @@ class TrainingConfig(SDFTConfig):
     per_device_train_batch_size: int = 1
     gradient_accumulation_steps: int = 16
     optim: OptimizerNames | str = "adamw_bnb_8bit"
-    learning_rate: float = 5e-5
+    learning_rate: float = 1e-5
     lr_scheduler_type: SchedulerType | str = "linear"
     bf16: bool | None = None  # TRL enables bf16 unless fp16 is set.
     gradient_checkpointing: bool = True

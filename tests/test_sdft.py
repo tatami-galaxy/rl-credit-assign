@@ -42,6 +42,8 @@ class ConfigTest(unittest.TestCase):
             use_cpu=True, bf16=False, max_steps=1000, report_to="wandb",
             per_device_train_batch_size=1, gradient_accumulation_steps=16,
             optim="adamw_bnb_8bit", max_completion_length=8192,
+            # 1e-5 is this repo's SDFT default; TRL's default is 5e-5.
+            learning_rate=1e-5,
             temperature=0.6, top_p=0.95, top_k=20, use_vllm=True,
         ).to_dict()
         ours = TrainingConfig(use_cpu=True, bf16=False).to_dict()
