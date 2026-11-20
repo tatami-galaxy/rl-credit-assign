@@ -1,16 +1,44 @@
 # Offline natural-language critic
 
 The first experiment trains a separate critic on fixed, hindsight-informed
-critiques of DeepMath reasoning paragraphs. The actor and target generator stay
+critiques of DeepMath reasoning segments. The actor and target generator stay
 frozen. This implements the initial supervised critic experiment (Option 1);
 actor updates and bootstrapped critic targets are outside its scope.
 
-The student sees the problem, preceding reasoning, and current segment. The
-target generator also sees the sampled continuation, verifier score, extracted
-answer, and reference final answer. It writes a critique of the current segment,
-distinguishing correctness from usefulness and expressing downstream effects as
-predictions. Only its final `<critique>...</critique>` is supervised; teacher
-thinking and the student prompt are excluded from the loss.
+The **student** is the trainable critic. The **teacher** is the frozen model
+that generates its critique targets. The **actor** is the frozen solver that
+produced the cached mathematical reasoning traces.
+
+The "current segment" is a consecutive group of actor reasoning paragraphs;
+"preceding reasoning" means all actor reasoning before that group. For
+example, when critiquing merged paragraphs 5–7, the student receives the
+problem, actor paragraphs 1–4, and paragraphs 5–7. Its task is to critique
+the group 5–7.
+
+| Prompt content | Student critic | Teacher / target generator |
+| --- | --- | --- |
+| Critique instructions and problem statement | Yes | Yes |
+| Preceding actor reasoning and current segment | Yes | Yes |
+| Remaining actor rollout, including its final answer | No | Yes |
+| Verifier score, extracted answer, and reference final answer | No | Yes |
+
+The teacher prompt is built from the student prompt, then extended with the
+privileged information and instructions for using it. The teacher is asked to
+distinguish correctness from usefulness and express downstream effects as
+predictions in its final `<critique>...</critique>`.
+
+During SFT, the student receives its prompt as context and is trained to predict
+the teacher's final critique (including its tags and the end-of-sequence token).
+Prompt tokens have loss labels of `-100`: they remain visible to the student,
+but predicting those tokens is not part of the training objective. Only the
+student's parameters are updated; the teacher is used offline to create targets.
+
+Teacher thinking was disabled with `--no_thinking` for the Qwen3-1.7B run and
+the MiniCPM thinking-off control. The initial MiniCPM run used thinking, and
+the target-generation CLI still enables it by default. When teacher thinking
+is enabled, its thinking text is discarded before constructing the student's
+training example; only the final critique is used. Student critic prompts use
+thinking disabled for both training and prediction.
 
 ## Defaults
 
@@ -21,7 +49,7 @@ thinking and the student prompt are excluded from the loss.
 | Problems | 200 training / 50 validation, disjoint by question |
 | Actor rollouts | 2 per question; temperature 1, top-p 0.95, top-k disabled |
 | Actor generation limit | 8,192 tokens |
-| Segments | Up to 4 uniformly sampled paragraphs per eligible rollout |
+| Segments | Merge paragraphs to at least 50 words, then uniformly sample up to 4 per eligible rollout |
 | Target generation | Thinking enabled; 2,048 tokens; temperature 0.6 |
 | Critic generation | Thinking disabled; 512 tokens; greedy |
 | Generation context limit | 16,384 tokens, including generation budget |
@@ -36,6 +64,19 @@ template. Single newlines stay within a segment. Character offsets reference
 the original response; no paragraph text is rewritten. The final answer is part
 of the teacher-visible continuation, not a reasoning segment. Prefixes are kept
 in full.
+
+Consecutive paragraphs are merged greedily until they contain at least
+`--min_segment_words 50` whitespace-separated words (`len(text.split())`).
+A paragraph already at or above the minimum stays intact. A final short
+remainder is appended to the preceding segment. If the entire reasoning is
+shorter than the minimum, that rollout is excluded from annotation and counted
+as `reasoning_below_min_words`. Merging preserves every internal blank line
+and the original character offsets. Sampling happens after merging.
+
+Pass `--min_segment_words 0` for the original one-paragraph segmentation.
+New target files use schema version 2 and record inclusive paragraph ranges,
+word counts, and segment indices. Existing saved datasets remain readable;
+use a new output directory when generating targets with the new schema.
 
 All raw rollouts are retained. Truncated or unfinished rollouts, verifier errors,
 and missing/empty reasoning are excluded from annotation and counted. Wrong
@@ -73,13 +114,13 @@ critic inherit the collected actor's revision unless overridden.
 
 Pass `--no_thinking` to target generation to disable thinking in the model's
 chat template. For example, compare Qwen3-1.7B on the same cached MiniCPM
-rollouts without recollecting them:
+rollouts without recollecting them, using the 50-word minimum:
 
 ```sh
 .venv/bin/python -m expts.nlac.targets \
     --corpus_dir results/nlac/smoke-20261120/corpus \
-    --model_name Qwen/Qwen3-1.7B --no_thinking \
-    --output_dir results/nlac/smoke-20261120/qwen3-1.7b-targets-no-thinking
+    --model_name Qwen/Qwen3-1.7B --no_thinking --min_segment_words 50 \
+    --output_dir results/nlac/min50-20261120/qwen3-1.7b-targets
 ```
 
 The thinking flag is saved with the run settings; changing it requires a new
@@ -132,7 +173,7 @@ example, though hardware and library changes can still affect numerical results.
 | `corpus/split_manifest.json` | Copy of the shared dataset split |
 | `corpus/problems.jsonl` | Question IDs, splits, reference answers, original chat prompts and token IDs |
 | `corpus/rollouts/part-*.jsonl` | Sample IDs, text, token IDs, stop reasons, seeds, extracted answers and verifier results |
-| `targets/segments.jsonl` | Selected rollout/paragraph IDs, exact character offsets and selection seeds |
+| `targets/segments.jsonl` | Selected rollout IDs, paragraph ranges, word counts, exact character offsets and selection seeds |
 | `targets/targets/part-*.jsonl` | Raw teacher generations, final critiques and rejection reasons |
 | `targets/selection_summary.json`, `targets/summary.json` | Selection exclusions and target acceptance counts |
 | `training/data_report.json` | Included segment IDs/lengths and exclusions |
@@ -165,7 +206,8 @@ CUDA_VISIBLE_DEVICES='' HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 \
     .venv/bin/python -m unittest discover -s tests -p test_nlac.py -v
 ```
 
-These tests cover exact segment offsets, exclusions, prompt isolation, final
+These tests cover exact segment offsets, minimum-size merging and short tails,
+exclusions, prompt isolation, final
 critique extraction, cached restarts, loss masking, changed-data rejection, and
 real training/checkpoint resume with a tiny CPU model. Generation is mocked.
 
@@ -173,7 +215,7 @@ real training/checkpoint resume with a tiny CPU model. Generation is mocked.
 
 Artifacts are in `results/nlac/smoke-20261120/`; the one-step checkpoint is in
 `models/nlac/smoke-20261120/final/`. This run used the defaults except for four
-training questions, two validation questions, and one optimizer step with
+training questions, two validation questions, unmerged paragraphs, and one optimizer step with
 gradient accumulation 1. The 57-test repository suite passed, including the
 tiny-model training and resume test.
 
@@ -217,3 +259,23 @@ The matched outputs and configurations are saved under
 `results/nlac/smoke-20261120/`. See `critique-comparison.md` for all three
 critiques per segment and `critique-comparison.json` for the counts. The new
 runs are `qwen3-1.7b-targets-no-thinking/` and `minicpm-targets-no-thinking/`.
+
+## Minimum 50-word experiment
+
+Greedy merging reduces the same 160 eligible paragraphs to 58 segments. Every
+segment meets the minimum: word counts have mean 88.1, median 74, minimum 50,
+and maximum 287. Sampling up to four per rollout selects 25 segments, with mean
+100.0, median 83, minimum 52, and maximum 287 words.
+
+With thinking off, Qwen3-1.7B produces valid critique formatting on 25/25 and
+MiniCPM5-2B-SFT on 18/25. Spot checks still show both models crediting the
+current segment with later work and missing local errors. For example,
+`4732:0:0` concludes an incorrect domain bound; both teachers approve it and
+discuss a substitution and polynomial solution that occur later. The larger
+segments remove tiny fragments but do not resolve this observed failure.
+
+The new samples differ from the earlier 27 unmerged paragraphs, so format
+counts are descriptive rather than a matched-segment quality comparison.
+All 59 repository tests pass. Full outputs, size statistics, and inspection
+notes are in `results/nlac/min50-20261120/comparison.md`; raw artifacts and
+generation settings are in the adjacent model directories.

@@ -17,7 +17,7 @@ from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3ForCausalLM
 from expts.data import deepmath
 from expts.nlac import collect, generation, predict, targets
 from expts.nlac.data import (
-    extract_critique, load_corpus, read_json, read_jsonl, reasoning_segments,
+    extract_critique, load_corpus, merge_paragraphs, read_json, read_jsonl, reasoning_segments,
     segment_context, select_segments, write_json, write_jsonl,
 )
 from expts.nlac.prompts import critic_prompt, target_prompt
@@ -44,11 +44,41 @@ class SegmentTest(unittest.TestCase):
         rollouts["1"]["truncated"] = True
         rollouts["2"]["verifier_error"] = "timeout"
         rollouts["3"]["response"] = "no thinking"
-        segments, excluded = select_segments(problems, rollouts, 4, 42)
-        self.assertEqual((segments, excluded), select_segments(problems, rollouts, 4, 42))
+        segments, excluded = select_segments(problems, rollouts, 4, 42, min_segment_words=0)
+        self.assertEqual((segments, excluded), select_segments(problems, rollouts, 4, 42, min_segment_words=0))
         self.assertEqual(len(segments), 4)
         self.assertEqual(len({s["paragraph_index"] for s in segments}), 4)
         self.assertEqual(excluded, {"truncated": 1, "verifier_error": 1, "missing_or_empty_reasoning": 1})
+
+    def test_merging_preserves_text_and_folds_short_tail(self):
+        paragraphs = [" ".join([word] * size) for word, size in (("a", 10), ("b", 40), ("c", 51), ("d", 3))]
+        separator = "\r\n \t\r\n"
+        response = "<think>  " + separator.join(paragraphs) + "  </think>FINAL"
+        spans = reasoning_segments(response, "prompt")
+        merged = merge_paragraphs(response, spans, 50)
+        self.assertEqual([s["word_count"] for s in merged], [50, 54])
+        self.assertEqual([(s["paragraph_index"], s["paragraph_end_index"]) for s in merged], [(0, 1), (2, 3)])
+        self.assertEqual([response[s["start"]:s["end"]] for s in merged],
+                         [separator.join(paragraphs[:2]), separator.join(paragraphs[2:])])
+        self.assertEqual(merge_paragraphs(response, spans, 105), [])
+        self.assertEqual(merge_paragraphs(response, [], 50), [])
+        self.assertEqual([s["word_count"] for s in merge_paragraphs(response, spans, 0)], [10, 40, 51, 3])
+        with self.assertRaises(ValueError):
+            merge_paragraphs(response, spans, -1)
+
+    def test_selection_merges_before_sampling_and_excludes_short_reasoning(self):
+        problems = {1: {"rendered_prompt": "<think>"}}
+        base = {"example_id": 1, "split": "train", "truncated": False,
+                "verifier_error": None, "finish_reason": "stop"}
+        paragraphs = [" ".join([word] * size) for word, size in (("a", 20), ("b", 30), ("c", 60))]
+        rollouts = {"long": {**base, "rollout_id": "long", "response": "\n\n".join(paragraphs) + "</think>FINAL"},
+                    "short": {**base, "rollout_id": "short", "response": "Too short.</think>FINAL"}}
+        segments, excluded = select_segments(problems, rollouts, 4, 42)
+        self.assertEqual([s["segment_id"] for s in segments], ["long:0-1", "long:2"])
+        self.assertEqual([s["word_count"] for s in segments], [50, 60])
+        self.assertTrue(all(s["num_paragraphs"] == 3 and s["num_segments"] == 2 for s in segments))
+        self.assertEqual(excluded, {"reasoning_below_min_words": 1})
+        self.assertEqual((segments, excluded), select_segments(problems, rollouts, 4, 42))
 
     def test_privileged_information_is_only_in_target_prompt(self):
         visible = critic_prompt("QUESTION", "PREFIX", "CURRENT")
@@ -108,7 +138,8 @@ class PipelineTest(unittest.TestCase):
                 elif not thinking:
                     response = "<critique>Useful step.</critique>"
                 else:
-                    response = "First calculation.\n\nSecond calculation.\n\nLast calculation.</think>\n\\boxed{2}"
+                    paragraphs = [" ".join([word] * size) for word, size in (("First", 26), ("Second", 25), ("Last", 50))]
+                    response = "\n\n".join(paragraphs) + "</think>\n\\boxed{2}"
                 return [{"response": response, "response_token_ids": tokenizer.encode(response),
                          "response_length": len(tokenizer.encode(response)), "generation_seed": seed,
                          "finish_reason": "stop", "stop_reason": None, "truncated": False} for seed in seeds]
@@ -133,6 +164,11 @@ class PipelineTest(unittest.TestCase):
                     calls = sampler.call_count
                     targets.main()
                     self.assertEqual(sampler.call_count, calls)
+                    self.assertEqual(read_json(labels / "run_config.json")["min_segment_words"], 50)
+                    self.assertTrue(all(s["word_count"] >= 50 for s in read_jsonl(labels / "segments.jsonl")))
+                with patch.object(sys, "argv", target_flags + ["--min_segment_words", "0"]):
+                    with self.assertRaisesRegex(ValueError, "Settings"):
+                        targets.main()
                 with patch.object(sys, "argv", target_flags + ["--no_thinking"]):
                     with self.assertRaisesRegex(ValueError, "Settings"):
                         targets.main()

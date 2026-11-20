@@ -16,6 +16,7 @@ def main():
     parser.add_argument("--num_val_problems", type=int, default=50)
     parser.add_argument("--num_generations", type=int, default=2)
     parser.add_argument("--split_manifest")
+
     args = parser.parse_args()
     generation.validate(args, parser)
     if min(args.num_train_problems, args.num_val_problems, args.num_generations) <= 0:
@@ -30,6 +31,7 @@ def main():
     data_config = deepmath.DataConfig(split_manifest=args.split_manifest)
     train, _, train_metadata = deepmath.load_training_data(data_config, args.seed)
     validation, _, val_metadata = deepmath.load_eval_data(data_config, args.num_val_problems)
+
     if args.num_train_problems > len(train):
         parser.error("Requested more training problems than the saved split contains.")
     selected = train.shuffle(seed=args.seed).select(range(args.num_train_problems))
@@ -37,6 +39,7 @@ def main():
     entries += [{**entry, "split": "validation"} for entry in validation]
     if len({entry["example_id"] for entry in entries}) != len(entries):
         raise ValueError("Training and validation problems overlap.")
+        
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, revision=args.model_revision)
     problems = []
     for entry in entries:

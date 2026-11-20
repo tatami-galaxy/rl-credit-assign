@@ -111,7 +111,28 @@ def reasoning_segments(response, rendered_prompt):
     return [{"reasoning_start": start, "start": left, "end": right} for left, right in spans]
 
 
-def select_segments(problems, rollouts, segments_per_rollout, seed):
+def merge_paragraphs(response, paragraphs, min_words):
+    """Merge consecutive paragraphs, preserving exact source offsets and whitespace."""
+    if min_words < 0:
+        raise ValueError("min_words must be nonnegative.")
+    merged, first, words = [], 0, 0
+    for index, paragraph in enumerate(paragraphs):
+        words += len(response[paragraph["start"]:paragraph["end"]].split())
+        if words >= min_words:
+            merged.append({
+                **paragraphs[first], "end": paragraph["end"],
+                "paragraph_index": first, "paragraph_end_index": index, "word_count": words,
+            })
+            first, words = index + 1, 0
+    if first < len(paragraphs) and merged:
+        # Fold a short trailing group into the preceding complete segment.
+        merged[-1].update(end=paragraphs[-1]["end"], paragraph_end_index=len(paragraphs) - 1,
+                          word_count=merged[-1]["word_count"] + words)
+    # If the entire reasoning is too short, there is no segment meeting the minimum.
+    return merged
+
+
+def select_segments(problems, rollouts, segments_per_rollout, seed, min_segment_words=50):
     segments, exclusions = [], Counter()
     for rollout in rollouts.values():
         reason = None
@@ -122,18 +143,25 @@ def select_segments(problems, rollouts, segments_per_rollout, seed):
         elif rollout["verifier_error"] is not None:
             reason = "verifier_error"
         problem = problems[rollout["example_id"]]
-        spans = reasoning_segments(rollout["response"], problem["rendered_prompt"]) if reason is None else []
-        if reason or not spans:
+        paragraphs = reasoning_segments(rollout["response"], problem["rendered_prompt"]) if reason is None else []
+        if reason or not paragraphs:
             exclusions[reason or "missing_or_empty_reasoning"] += 1
+            continue
+        spans = merge_paragraphs(rollout["response"], paragraphs, min_segment_words)
+        if not spans:
+            exclusions["reasoning_below_min_words"] += 1
             continue
         selection_seed = int(fingerprint([seed, rollout["rollout_id"]])[:8], 16)
         chosen = sorted(Random(selection_seed).sample(range(len(spans)), min(segments_per_rollout, len(spans))))
         for index in chosen:
+            span = spans[index]
+            first, last = span["paragraph_index"], span["paragraph_end_index"]
+            suffix = str(first) if first == last else f"{first}-{last}"
             segments.append({
-                "segment_id": f"{rollout['rollout_id']}:{index}", "rollout_id": rollout["rollout_id"],
+                "segment_id": f"{rollout['rollout_id']}:{suffix}", "rollout_id": rollout["rollout_id"],
                 "example_id": rollout["example_id"], "split": rollout["split"],
-                "paragraph_index": index, "num_paragraphs": len(spans),
-                "selection_seed": selection_seed, **spans[index],
+                "segment_index": index, "num_segments": len(spans), "num_paragraphs": len(paragraphs),
+                "selection_seed": selection_seed, **span,
             })
     return segments, dict(exclusions)
 
