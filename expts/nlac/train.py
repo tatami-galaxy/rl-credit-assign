@@ -104,7 +104,8 @@ def prepare_data(directory, tokenizer, max_length):
     for split, examples in datasets.items():
         if not examples:
             raise ValueError(f"No usable {split} targets after filtering: {report['excluded'][:5]}")
-    digest = files_fingerprint([directory / "run_config.json", directory / "segments.jsonl", *paths])
+    segments_dir = Path(source.get("segments_dir", directory))
+    digest = files_fingerprint([directory / "run_config.json", segments_dir / "segments.jsonl", *paths])
     return {split: Dataset.from_list(rows) for split, rows in datasets.items()}, report, digest
 
 

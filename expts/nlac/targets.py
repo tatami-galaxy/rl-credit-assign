@@ -1,26 +1,20 @@
-"""Generate fixed hindsight-informed critiques for sampled reasoning segments."""
+"""Generate hindsight-informed critiques for a saved selection of reasoning segments."""
 
 import argparse
 from collections import Counter
 from pathlib import Path
-from statistics import mean, median
 
 from . import generation
 from .data import (
-    cached_shard, extract_critique, fingerprint, load_corpus, save_config, segment_context,
-    select_segments, write_json, write_jsonl, write_preview,
+    cached_shard, extract_critique, fingerprint, load_segments, read_json, save_config,
+    segment_context, write_json, write_jsonl, write_preview,
 )
 from .prompts import CRITIC_INSTRUCTION, TARGET_INSTRUCTION, target_prompt
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corpus_dir", required=True)
-    parser.add_argument("--segments_per_rollout", type=int, default=4)
-    parser.add_argument(
-        "--min_segment_words", type=int, default=50,
-        help="Merge paragraphs until this many whitespace-separated words; 0 disables merging.",
-    )
+    parser.add_argument("--segments_dir", required=True, help="Directory containing the saved segments.jsonl.")
     parser.add_argument(
         "--no_thinking", dest="enable_thinking", action="store_false",
         help="Disable thinking in the target generator's chat template.",
@@ -29,46 +23,9 @@ def parse_args():
 
     args = parser.parse_args()
     generation.validate(args, parser)
-    if args.segments_per_rollout <= 0:
-        parser.error("segments_per_rollout must be positive.")
-    if args.min_segment_words < 0:
-        parser.error("min_segment_words must be nonnegative.")
-    args.corpus_dir = str(Path(args.corpus_dir).resolve())
+    args.segments_dir = str(Path(args.segments_dir).resolve())
     args.output_dir = str(Path(args.output_dir).resolve())
     return args
-
-
-def save_selection(args, segments, exclusions, corpus_digest, num_rollouts):
-    output_dir = Path(args.output_dir)
-    save_config(output_dir, {
-        **vars(args),
-        "schema_version": 2,
-        "stage": "targets",
-        "corpus_sha256": corpus_digest,
-        "segments_sha256": fingerprint(segments),
-        "critic_instruction": CRITIC_INSTRUCTION,
-        "target_instruction": TARGET_INSTRUCTION,
-        "privileged_inputs": ["continuation", "verifier_score", "extracted_answer", "reference_answer"],
-        "versions": generation.versions(),
-    })
-    write_jsonl(output_dir / "segments.jsonl", segments)
-
-    # Record excluded rollouts even when the selection is empty.
-    word_counts = [segment["word_count"] for segment in segments]
-    word_stats = None
-    if word_counts:
-        word_stats = {
-            "mean": mean(word_counts),
-            "median": median(word_counts),
-            "min": min(word_counts),
-            "max": max(word_counts),
-        }
-    write_json(output_dir / "selection_summary.json", {
-        "rollouts": num_rollouts,
-        "excluded_rollouts": exclusions,
-        "segments_by_split": dict(Counter(segment["split"] for segment in segments)),
-        "segment_words": word_stats,
-    })
 
 
 def build_teacher_prompts(segments, problems, rollouts):
@@ -125,19 +82,29 @@ def annotate_segments(args, segments, problems, rollouts):
 
 
 def main():
-    # Load the scored corpus and use its actor as the default teacher.
+    # Load the saved sample and use its actor as the default teacher.
     args = parse_args()
     output_dir = Path(args.output_dir)
-    corpus_config, problems, rollouts, corpus_digest = load_corpus(args.corpus_dir)
-    generation.resolve_model(args, corpus_config["model_name"], corpus_config["model_revision"])
-
-    # Select segments and save the exact inputs before starting teacher generation.
-    segments, exclusions = select_segments(
-        problems, rollouts, args.segments_per_rollout, args.seed, args.min_segment_words,
-    )
-    save_selection(args, segments, exclusions, corpus_digest, num_rollouts=len(rollouts))
+    source, problems, rollouts, segments = load_segments(args.segments_dir)
     if not segments:
-        raise ValueError("No eligible reasoning segments; inspect selection_summary.json.")
+        raise ValueError(f"No segments selected for annotation in {args.segments_dir}.")
+    actor = read_json(Path(source["corpus_dir"]) / "run_config.json")
+    generation.resolve_model(args, actor["model_name"], actor["model_revision"])
+
+    # Pin the corpus and segment file used for this teacher run.
+    save_config(output_dir, {
+        **vars(args),
+        "schema_version": 3,
+        "stage": "targets",
+        "segments_dir": source.get("segments_dir", args.segments_dir),
+        "segments_sha256": source["segments_sha256"],
+        "corpus_dir": source["corpus_dir"],
+        "corpus_sha256": source["corpus_sha256"],
+        "critic_instruction": CRITIC_INSTRUCTION,
+        "target_instruction": TARGET_INSTRUCTION,
+        "privileged_inputs": ["continuation", "verifier_score", "extracted_answer", "reference_answer"],
+        "versions": generation.versions(),
+    })
 
     # Generate hindsight-informed critiques, reusing any completed batches.
     annotations = annotate_segments(args, segments, problems, rollouts)

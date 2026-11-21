@@ -15,10 +15,10 @@ from tokenizers.pre_tokenizers import Whitespace
 from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3ForCausalLM
 
 from expts.data import deepmath
-from expts.nlac import collect, generation, predict, targets
+from expts.nlac import collect, generation, predict, segment, targets
 from expts.nlac.data import (
-    extract_critique, load_corpus, merge_paragraphs, read_json, read_jsonl, reasoning_segments,
-    segment_context, select_segments, write_json, write_jsonl,
+    extract_critique, files_fingerprint, fingerprint, load_corpus, merge_paragraphs,
+    read_json, read_jsonl, reasoning_segments, segment_context, select_segments, write_json, write_jsonl,
 )
 from expts.nlac.prompts import critic_prompt, target_prompt
 from expts.nlac.train import parse_config, prepare_data, train, validate_resume
@@ -138,7 +138,8 @@ class PipelineTest(unittest.TestCase):
                 elif not thinking:
                     response = "<critique>Useful step.</critique>"
                 else:
-                    paragraphs = [" ".join([word] * size) for word, size in (("First", 26), ("Second", 25), ("Last", 50))]
+                    paragraphs = [" ".join([word] * size) for word, size in
+                                  (("First", 26), ("Second", 25), ("Third", 50), ("Last", 50))]
                     response = "\n\n".join(paragraphs) + "</think>\n\\boxed{2}"
                 return [{"response": response, "response_token_ids": tokenizer.encode(response),
                          "response_length": len(tokenizer.encode(response)), "generation_seed": seed,
@@ -158,29 +159,41 @@ class PipelineTest(unittest.TestCase):
                 with patch.object(sys, "argv", collect_flags + ["--temperature", "0.5"]):
                     with self.assertRaisesRegex(ValueError, "Settings"):
                         collect.main()
-                target_flags = ["targets", "--corpus_dir", str(corpus), "--output_dir", str(labels), "--segments_per_rollout", "2"]
+                segments_dir = root / "segments"
+                segment_flags = ["segment", "--corpus_dir", str(corpus), "--output_dir", str(segments_dir),
+                                 "--segments_per_rollout", "2"]
+                with patch.object(sys, "argv", segment_flags), patch.object(generation, "resolve_model") as resolve:
+                    segment.main()
+                    resolve.assert_not_called()
+                    self.assertEqual(sampler.call_count, calls)
+                saved = read_jsonl(segments_dir / "segments.jsonl")
+                selected_ids = [row["segment_id"] for row in saved if row["selected"]]
+                self.assertEqual((len(saved), len(selected_ids)), (6, 4))
+                self.assertTrue(all(row["word_count"] >= 50 for row in saved))
+                self.assertEqual(read_json(segments_dir / "summary.json")["all_segments"]["count"], 6)
+                self.assertIn(saved[0]["text"], (segments_dir / "preview.txt").read_text())
+                with patch.object(sys, "argv", segment_flags + ["--min_segment_words", "0"]):
+                    with self.assertRaisesRegex(ValueError, "Settings"):
+                        segment.main()
+
+                target_flags = ["targets", "--segments_dir", str(segments_dir), "--output_dir", str(labels)]
                 with patch.object(sys, "argv", target_flags):
                     targets.main()
                     calls = sampler.call_count
                     targets.main()
                     self.assertEqual(sampler.call_count, calls)
-                    self.assertEqual(read_json(labels / "run_config.json")["min_segment_words"], 50)
-                    self.assertTrue(all(s["word_count"] >= 50 for s in read_jsonl(labels / "segments.jsonl")))
-                with patch.object(sys, "argv", target_flags + ["--min_segment_words", "0"]):
-                    with self.assertRaisesRegex(ValueError, "Settings"):
-                        targets.main()
+                    self.assertEqual(read_json(labels / "run_config.json")["segments_dir"], str(segments_dir))
                 with patch.object(sys, "argv", target_flags + ["--no_thinking"]):
                     with self.assertRaisesRegex(ValueError, "Settings"):
                         targets.main()
                 direct_labels = root / "labels-no-thinking"
-                with patch.object(sys, "argv", ["targets", "--corpus_dir", str(corpus),
-                                              "--output_dir", str(direct_labels), "--no_thinking",
-                                              "--segments_per_rollout", "2"]):
+                with patch.object(sys, "argv", ["targets", "--segments_dir", str(segments_dir),
+                                              "--output_dir", str(direct_labels), "--no_thinking"]):
                     targets.main()
                     self.assertFalse(sampler.call_args.kwargs["thinking"])
                     self.assertFalse(read_json(direct_labels / "run_config.json")["enable_thinking"])
                     direct_rows = read_jsonl(direct_labels / "targets/part-00000.jsonl")
-                    self.assertEqual(len(direct_rows), 4)
+                    self.assertEqual([row["segment_id"] for row in direct_rows], selected_ids)
                     self.assertTrue(all(r["target_error"] is None and "</think>" not in r["response"] for r in direct_rows))
                     calls = sampler.call_count
                     targets.main()
@@ -193,8 +206,11 @@ class PipelineTest(unittest.TestCase):
 
             datasets, report, _ = prepare_data(labels, tokenizer, 2048)
             self.assertEqual((len(datasets["train"]), len(datasets["validation"])), (2, 2))
-            source, problems, rollouts, _ = load_corpus(corpus)
-            segments = {s["segment_id"]: s for s in read_jsonl(labels / "segments.jsonl")}
+            _, problems, rollouts, _ = load_corpus(corpus)
+            segments = {s["segment_id"]: s for s in saved}
+            for row in saved:
+                response = rollouts[row["rollout_id"]]["response"]
+                self.assertEqual(row["text"], response[row["start"]:row["end"]])
             for split in datasets:
                 for included, row in zip([r for r in report["included"] if r["split"] == split], datasets[split], strict=True):
                     problem, _, prefix, current, _ = segment_context(segments[included["segment_id"]], problems, rollouts)
@@ -205,6 +221,20 @@ class PipelineTest(unittest.TestCase):
                     self.assertEqual(row["labels"][-1], tokenizer.eos_token_id)
             with self.assertRaisesRegex(ValueError, "context_limit"):
                 prepare_data(labels, tokenizer, 2)
+
+            # Older target runs embedded their sampled offsets and hashed that file for checkpoint resume.
+            legacy = root / "legacy-targets"
+            old_segments, _ = select_segments(problems, rollouts, 2, 42)
+            old_config = read_json(labels / "run_config.json")
+            del old_config["segments_dir"]
+            old_config.update(schema_version=2, output_dir=str(legacy), segments_sha256=fingerprint(old_segments))
+            write_json(legacy / "run_config.json", old_config)
+            write_jsonl(legacy / "segments.jsonl", old_segments)
+            shard = Path("targets/part-00000.jsonl")
+            write_jsonl(legacy / shard, read_jsonl(labels / shard))
+            old_data, _, digest = prepare_data(legacy, tokenizer, 2048)
+            self.assertEqual(old_data["train"][:], datasets["train"][:])
+            self.assertEqual(digest, files_fingerprint([legacy / "run_config.json", legacy / "segments.jsonl", legacy / shard]))
 
             flags = ["--targets_dir", str(labels), "--output_dir", str(root / "training"),
                      "--use_cpu", "true", "--bf16", "false", "--optim", "adamw_torch",
@@ -222,6 +252,10 @@ class PipelineTest(unittest.TestCase):
             config["targets_sha256"] = "changed"
             with self.assertRaisesRegex(ValueError, "targets_sha256"):
                 validate_resume(checkpoint, config)
+            write_jsonl(segments_dir / "segments.jsonl", saved[:-1])
+            with self.assertRaisesRegex(ValueError, "segment selection"):
+                prepare_data(labels, tokenizer, 2048)
+            write_jsonl(segments_dir / "segments.jsonl", saved)
             rows = read_jsonl(corpus / "rollouts/part-00000.jsonl")
             rows[0]["response"] += "changed"
             write_jsonl(corpus / "rollouts/part-00000.jsonl", rows)

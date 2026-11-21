@@ -17,7 +17,7 @@ critiques.
 
 ```mermaid
 flowchart LR
-    collect[collect.py] --> targets[targets.py]
+    collect[collect.py] --> segment[segment.py] --> targets[targets.py]
     targets --> baseline["predict.py (baseline)"]
     targets --> train[train.py] --> trained["predict.py (trained)"]
 ```
@@ -29,12 +29,20 @@ available GPU and choose a fresh run name.
 export CUDA_VISIBLE_DEVICES=0
 export VLLM_USE_FLASHINFER_SAMPLER=0
 nlac_run=nlac/option1
+segments_dir="data/$nlac_run/segments/min50"
 
 .venv/bin/python -m expts.nlac.collect \
     --output_dir "data/$nlac_run/corpus"
 
+.venv/bin/python -m expts.nlac.segment \
+    --corpus_dir "data/$nlac_run/corpus" --output_dir "$segments_dir"
+```
+
+In `$segments_dir`, open `preview.txt` to see the boundaries in each rollout. 
+
+```sh
 .venv/bin/python -m expts.nlac.targets \
-    --corpus_dir "data/$nlac_run/corpus" --output_dir "data/$nlac_run/targets"
+    --segments_dir "$segments_dir" --output_dir "data/$nlac_run/targets"
 
 .venv/bin/python -m expts.nlac.predict \
     --targets_dir "data/$nlac_run/targets" --output_dir "results/$nlac_run/baseline"
@@ -55,7 +63,8 @@ see both critics' responses to the same validation segments.
 | File | Purpose |
 | --- | --- |
 | [collect.py](collect.py) | Generates and scores DeepMath solutions from the frozen actor. |
-| [targets.py](targets.py) | Samples segments from saved solutions and generates teacher critiques. |
+| [segment.py](segment.py) | Saves the segment boundaries, marks the sample for annotation, and writes a preview. |
+| [targets.py](targets.py) | Generates teacher critiques for the marked segments in a saved dataset. |
 | [train.py](train.py) | Fine-tunes the student critic on the saved critiques. |
 | [predict.py](predict.py) | Saves baseline or trained critic responses on the same segments for comparison. |
 | [prompts.py](prompts.py) | Builds the student and teacher prompts. |

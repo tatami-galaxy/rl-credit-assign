@@ -132,7 +132,8 @@ def merge_paragraphs(response, paragraphs, min_words):
     return merged
 
 
-def select_segments(problems, rollouts, segments_per_rollout, seed, min_segment_words=50):
+def segment_rollouts(problems, rollouts, segments_per_rollout, seed, min_segment_words=50):
+    """Keep every eligible segment in rollout order and mark the sample for the teacher."""
     segments, exclusions = [], Counter()
     for rollout in rollouts.values():
         reason = None
@@ -152,9 +153,8 @@ def select_segments(problems, rollouts, segments_per_rollout, seed, min_segment_
             exclusions["reasoning_below_min_words"] += 1
             continue
         selection_seed = int(fingerprint([seed, rollout["rollout_id"]])[:8], 16)
-        chosen = sorted(Random(selection_seed).sample(range(len(spans)), min(segments_per_rollout, len(spans))))
-        for index in chosen:
-            span = spans[index]
+        chosen = set(Random(selection_seed).sample(range(len(spans)), min(segments_per_rollout, len(spans))))
+        for index, span in enumerate(spans):
             first, last = span["paragraph_index"], span["paragraph_end_index"]
             suffix = str(first) if first == last else f"{first}-{last}"
             segments.append({
@@ -162,8 +162,20 @@ def select_segments(problems, rollouts, segments_per_rollout, seed, min_segment_
                 "example_id": rollout["example_id"], "split": rollout["split"],
                 "segment_index": index, "num_segments": len(spans), "num_paragraphs": len(paragraphs),
                 "selection_seed": selection_seed, **span,
+                "selected": index in chosen,
+                "text": rollout["response"][span["start"]:span["end"]],
             })
     return segments, dict(exclusions)
+
+
+def select_segments(problems, rollouts, segments_per_rollout, seed, min_segment_words=50):
+    """Return just the sampled spans in the original offset-only format."""
+    segments, exclusions = segment_rollouts(problems, rollouts, segments_per_rollout, seed, min_segment_words)
+    selected = [
+        {key: value for key, value in row.items() if key not in ("selected", "text")}
+        for row in segments if row["selected"]
+    ]
+    return selected, exclusions
 
 
 def segment_context(segment, problems, rollouts):
@@ -179,13 +191,17 @@ def segment_context(segment, problems, rollouts):
 
 
 def load_segments(directory):
+    """Return the segments selected for annotation and their verified source corpus."""
     directory = Path(directory)
     config = read_json(directory / "run_config.json")
     _, problems, rollouts, digest = load_corpus(config["corpus_dir"])
-    segments = read_jsonl(directory / "segments.jsonl")
+    # Older target runs stored just the selected segments beside their annotations.
+    segments_dir = Path(config.get("segments_dir", directory))
+    segments = read_jsonl(segments_dir / "segments.jsonl")
     if digest != config["corpus_sha256"] or fingerprint(segments) != config["segments_sha256"]:
-        raise ValueError("Corpus or segment selection changed after target generation.")
-    return config, problems, rollouts, segments
+        raise ValueError("Corpus or segment selection changed after it was saved.")
+    selected = [row for row in segments if row.get("selected", True)]
+    return config, problems, rollouts, selected
 
 
 def extract_critique(response, truncated=False, require_thinking_end=False):
